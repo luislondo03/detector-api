@@ -1,0 +1,6 @@
+.git
+.env
+storage
+tmp
+bin
+coverage.out
