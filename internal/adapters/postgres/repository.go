@@ -100,7 +100,17 @@ func (repository *Repository) List(ctx context.Context, filter application.Incid
 		}
 		incidents = append(incidents, incident)
 	}
-	return incidents, total, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	evidenceByIncident, err := repository.evidenceForIncidents(ctx, incidents)
+	if err != nil {
+		return nil, 0, err
+	}
+	for index := range incidents {
+		incidents[index].Evidence = evidenceByIncident[incidents[index].EventID]
+	}
+	return incidents, total, nil
 }
 
 func (repository *Repository) AddEvidence(ctx context.Context, evidence domain.Evidence) error {
@@ -125,10 +135,41 @@ func (repository *Repository) evidenceFor(ctx context.Context, incidentID string
 	return evidence, rows.Err()
 }
 
+// evidenceForIncidents avoids one database query per row in the list endpoint.
+func (repository *Repository) evidenceForIncidents(ctx context.Context, incidents []domain.Incident) (map[string][]domain.Evidence, error) {
+	evidenceByIncident := make(map[string][]domain.Evidence, len(incidents))
+	incidentIDs := make([]string, 0, len(incidents))
+	for _, incident := range incidents {
+		evidenceByIncident[incident.EventID] = make([]domain.Evidence, 0)
+		incidentIDs = append(incidentIDs, incident.EventID)
+	}
+	if len(incidentIDs) == 0 {
+		return evidenceByIncident, nil
+	}
+
+	rows, err := repository.pool.Query(ctx, `
+		SELECT id, incident_id, media_type, url, created_at
+		FROM incident_evidence
+		WHERE incident_id = ANY($1)
+		ORDER BY created_at`, incidentIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var item domain.Evidence
+		if err := rows.Scan(&item.ID, &item.IncidentID, &item.MediaType, &item.URL, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		evidenceByIncident[item.IncidentID] = append(evidenceByIncident[item.IncidentID], item)
+	}
+	return evidenceByIncident, rows.Err()
+}
+
 type rowScanner interface{ Scan(...any) error }
 
 func scanIncident(row rowScanner) (domain.Incident, error) {
-	var incident domain.Incident
+	incident := domain.Incident{Evidence: make([]domain.Evidence, 0)}
 	var details json.RawMessage
 	err := row.Scan(&incident.EventID, &incident.SessionID, &incident.Type, &incident.Lifecycle, &incident.Severity, &incident.StartedAt, &incident.EndedAt, &incident.DurationMilliseconds, &incident.Confidence, &incident.ObservationQuality, &incident.DetectorVersion, &incident.ModelVersion, &incident.ThresholdProfileID, &details, &incident.AlertTriggered, &incident.CreatedAt, &incident.UpdatedAt)
 	incident.Details = details
