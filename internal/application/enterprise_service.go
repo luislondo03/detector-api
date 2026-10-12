@@ -1,0 +1,175 @@
+package application
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"errors"
+	"time"
+
+	"github.com/drivervision/api/internal/domain"
+	"github.com/google/uuid"
+)
+
+type EnterpriseRepository interface {
+	CreateCompany(context.Context, domain.Company) (domain.Company, error)
+	CreateVehicle(context.Context, domain.Vehicle) (domain.Vehicle, error)
+	CreateDevice(context.Context, domain.Device) (domain.Device, error)
+	CreateEnrollmentCode(context.Context, domain.EnrollmentCode) error
+	RedeemEnrollment(context.Context, string, string, time.Time) (domain.EnrollmentResult, error)
+	AuthenticateDevice(context.Context, string) (domain.DevicePrincipal, error)
+	RevokeDevice(context.Context, string, time.Time) error
+	RecordEvent(context.Context, domain.DevicePrincipal, domain.DeviceEvent) (domain.BatchAck, error)
+	RecordSession(context.Context, domain.DevicePrincipal, domain.MonitoringSession) (domain.BatchAck, error)
+	RecordCoverage(context.Context, domain.DevicePrincipal, domain.CoverageInterval) (domain.BatchAck, error)
+	RecordTelemetry(context.Context, domain.DevicePrincipal, domain.TelemetryMessage) (domain.BatchAck, error)
+	RecordHeartbeat(context.Context, domain.DevicePrincipal, domain.DeviceHeartbeat) (domain.BatchAck, error)
+	ListFleet(context.Context) ([]FleetVehicle, error)
+}
+
+var (
+	ErrEnrollmentInvalid  = errors.New("enrollment code is invalid, expired or already used")
+	ErrDeviceUnauthorized = errors.New("device credential is invalid or revoked")
+)
+
+type FleetVehicle struct {
+	VehicleID       string     `json:"vehicleId"`
+	Plate           string     `json:"plate"`
+	InternalCode    string     `json:"internalCode"`
+	DeviceID        string     `json:"deviceId"`
+	DeviceLabel     string     `json:"deviceLabel"`
+	LastContactAt   *time.Time `json:"lastContactAt,omitempty"`
+	OperationStatus string     `json:"operationStatus,omitempty"`
+	Latitude        *float64   `json:"latitude,omitempty"`
+	Longitude       *float64   `json:"longitude,omitempty"`
+	LocationAt      *time.Time `json:"locationAt,omitempty"`
+	BatteryPercent  *int       `json:"batteryPercent,omitempty"`
+}
+
+type EnterpriseService struct {
+	repository EnterpriseRepository
+	now        func() time.Time
+}
+
+func NewEnterpriseService(repository EnterpriseRepository) *EnterpriseService {
+	return &EnterpriseService{repository: repository, now: time.Now}
+}
+
+func (service *EnterpriseService) CreateCompany(ctx context.Context, name, timezone string) (domain.Company, error) {
+	if name == "" {
+		return domain.Company{}, errors.New("name is required")
+	}
+	if timezone == "" {
+		timezone = "America/Bogota"
+	}
+	return service.repository.CreateCompany(ctx, domain.Company{ID: uuid.NewString(), Name: name, Timezone: timezone, CreatedAt: service.now().UTC()})
+}
+
+func (service *EnterpriseService) CreateVehicle(ctx context.Context, companyID, plate, internalCode string) (domain.Vehicle, error) {
+	if companyID == "" || plate == "" {
+		return domain.Vehicle{}, errors.New("companyId and plate are required")
+	}
+	return service.repository.CreateVehicle(ctx, domain.Vehicle{ID: uuid.NewString(), CompanyID: companyID, Plate: plate, InternalCode: internalCode, Status: "ACTIVE", CreatedAt: service.now().UTC()})
+}
+
+func (service *EnterpriseService) CreateDevice(ctx context.Context, companyID, label, hardware string) (domain.Device, error) {
+	if companyID == "" {
+		return domain.Device{}, errors.New("companyId is required")
+	}
+	return service.repository.CreateDevice(ctx, domain.Device{ID: uuid.NewString(), CompanyID: companyID, Label: label, Hardware: hardware})
+}
+
+func (service *EnterpriseService) CreateEnrollment(ctx context.Context, companyID, vehicleID, deviceID string, expiresIn time.Duration) (domain.EnrollmentCode, error) {
+	if companyID == "" || vehicleID == "" || deviceID == "" {
+		return domain.EnrollmentCode{}, errors.New("companyId, vehicleId and deviceId are required")
+	}
+	if expiresIn <= 0 || expiresIn > 24*time.Hour {
+		expiresIn = 15 * time.Minute
+	}
+	code, err := randomSecret()
+	if err != nil {
+		return domain.EnrollmentCode{}, err
+	}
+	// Device is bound by creating the active assignment before the one-time credential is redeemed.
+	if err := service.repository.CreateEnrollmentCode(ctx, domain.EnrollmentCode{ID: uuid.NewString(), CompanyID: companyID, VehicleID: vehicleID, DeviceID: deviceID, Code: hashSecret(code), ExpiresAt: service.now().UTC().Add(expiresIn)}); err != nil {
+		return domain.EnrollmentCode{}, err
+	}
+	return domain.EnrollmentCode{CompanyID: companyID, VehicleID: vehicleID, DeviceID: deviceID, Code: code, QRPayload: "DRIVER_VISION_ENROLL:" + code, ExpiresAt: service.now().UTC().Add(expiresIn)}, nil
+}
+
+func (service *EnterpriseService) Redeem(ctx context.Context, code string) (domain.EnrollmentResult, error) {
+	if code == "" {
+		return domain.EnrollmentResult{}, ErrEnrollmentInvalid
+	}
+	token, err := randomSecret()
+	if err != nil {
+		return domain.EnrollmentResult{}, err
+	}
+	result, err := service.repository.RedeemEnrollment(ctx, hashSecret(code), hashSecret(token), service.now().UTC())
+	if err != nil {
+		return domain.EnrollmentResult{}, err
+	}
+	result.DeviceToken = token
+	result.TelemetryEverySeconds = 60
+	return result, nil
+}
+
+func (service *EnterpriseService) Authenticate(ctx context.Context, token string) (domain.DevicePrincipal, error) {
+	if token == "" {
+		return domain.DevicePrincipal{}, ErrDeviceUnauthorized
+	}
+	return service.repository.AuthenticateDevice(ctx, hashSecret(token))
+}
+
+func (service *EnterpriseService) Revoke(ctx context.Context, deviceID string) error {
+	return service.repository.RevokeDevice(ctx, deviceID, service.now().UTC())
+}
+func (service *EnterpriseService) Fleet(ctx context.Context) ([]FleetVehicle, error) {
+	return service.repository.ListFleet(ctx)
+}
+func (service *EnterpriseService) Event(ctx context.Context, principal domain.DevicePrincipal, value domain.DeviceEvent) (domain.BatchAck, error) {
+	if err := value.Validate(); err != nil {
+		return rejected(value.MessageID, err), nil
+	}
+	return service.repository.RecordEvent(ctx, principal, value)
+}
+func (service *EnterpriseService) Session(ctx context.Context, principal domain.DevicePrincipal, value domain.MonitoringSession) (domain.BatchAck, error) {
+	if err := value.SyncMessage.Validate(); err != nil || value.SessionID == "" {
+		return rejected(value.MessageID, errors.New("invalid session")), nil
+	}
+	return service.repository.RecordSession(ctx, principal, value)
+}
+func (service *EnterpriseService) Coverage(ctx context.Context, principal domain.DevicePrincipal, value domain.CoverageInterval) (domain.BatchAck, error) {
+	if err := value.SyncMessage.Validate(); err != nil || value.SessionID == "" || value.StartedAt.IsZero() || value.EndedAt.IsZero() {
+		return rejected(value.MessageID, errors.New("invalid coverage")), nil
+	}
+	return service.repository.RecordCoverage(ctx, principal, value)
+}
+func (service *EnterpriseService) Telemetry(ctx context.Context, principal domain.DevicePrincipal, value domain.TelemetryMessage) (domain.BatchAck, error) {
+	if err := value.Validate(); err != nil {
+		return rejected(value.MessageID, err), nil
+	}
+	return service.repository.RecordTelemetry(ctx, principal, value)
+}
+func (service *EnterpriseService) Heartbeat(ctx context.Context, principal domain.DevicePrincipal, value domain.DeviceHeartbeat) (domain.BatchAck, error) {
+	if err := value.SyncMessage.Validate(); err != nil || value.OccurredAt.IsZero() {
+		return rejected(value.MessageID, errors.New("invalid heartbeat")), nil
+	}
+	return service.repository.RecordHeartbeat(ctx, principal, value)
+}
+
+func rejected(messageID string, err error) domain.BatchAck {
+	return domain.BatchAck{MessageID: messageID, Status: "rejected", Code: err.Error()}
+}
+func hashSecret(value string) string {
+	hash := sha256.Sum256([]byte(value))
+	return base64.RawURLEncoding.EncodeToString(hash[:])
+}
+func randomSecret() (string, error) {
+	bytes := make([]byte, 32)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(bytes), nil
+}

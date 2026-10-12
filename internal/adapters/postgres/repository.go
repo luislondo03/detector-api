@@ -17,6 +17,12 @@ import (
 //go:embed migrations/001_initial.sql
 var initialSchema string
 
+//go:embed migrations/002_telemetry.sql
+var telemetrySchema string
+
+//go:embed migrations/003_enterprise.sql
+var enterpriseSchema string
+
 type Repository struct{ pool *pgxpool.Pool }
 
 func New(ctx context.Context, databaseURL string) (*Repository, error) {
@@ -32,10 +38,50 @@ func New(ctx context.Context, databaseURL string) (*Repository, error) {
 		pool.Close()
 		return nil, err
 	}
+	if _, err := pool.Exec(ctx, telemetrySchema); err != nil {
+		pool.Close()
+		return nil, err
+	}
+	if _, err := pool.Exec(ctx, enterpriseSchema); err != nil {
+		pool.Close()
+		return nil, err
+	}
 	return &Repository{pool: pool}, nil
 }
 
 func (repository *Repository) Close() { repository.pool.Close() }
+
+func (repository *Repository) SaveTelemetry(ctx context.Context, telemetry domain.DeviceTelemetry) (domain.DeviceTelemetry, error) {
+	row := repository.pool.QueryRow(ctx, `
+		INSERT INTO device_telemetry (id, device_id, session_id, captured_at, latitude, longitude, accuracy_meters, speed_kilometers_per_hour, bearing_degrees, provider, battery_percent, charging, manufacturer, model, android_version, app_version)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+		ON CONFLICT (id) DO NOTHING
+		RETURNING id, device_id, session_id, captured_at, latitude, longitude, accuracy_meters, speed_kilometers_per_hour, bearing_degrees, provider, battery_percent, charging, manufacturer, model, android_version, app_version, received_at`,
+		telemetry.ID, telemetry.DeviceID, telemetry.SessionID, telemetry.CapturedAt, telemetry.Latitude, telemetry.Longitude, telemetry.AccuracyMeters, telemetry.SpeedKilometersPerHour, telemetry.BearingDegrees, telemetry.Provider, telemetry.BatteryPercent, telemetry.Charging, telemetry.Manufacturer, telemetry.Model, telemetry.AndroidVersion, telemetry.AppVersion,
+	)
+	return scanTelemetry(row)
+}
+
+func (repository *Repository) ListLatestTelemetry(ctx context.Context, limit int) ([]domain.DeviceTelemetry, error) {
+	rows, err := repository.pool.Query(ctx, `
+		SELECT DISTINCT ON (device_id) id, device_id, session_id, captured_at, latitude, longitude, accuracy_meters, speed_kilometers_per_hour, bearing_degrees, provider, battery_percent, charging, manufacturer, model, android_version, app_version, received_at
+		FROM device_telemetry
+		ORDER BY device_id, captured_at DESC
+		LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]domain.DeviceTelemetry, 0)
+	for rows.Next() {
+		telemetry, err := scanTelemetry(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, telemetry)
+	}
+	return items, rows.Err()
+}
 
 func (repository *Repository) Save(ctx context.Context, incident domain.Incident) (domain.Incident, error) {
 	row := repository.pool.QueryRow(ctx, `
@@ -47,7 +93,9 @@ func (repository *Repository) Save(ctx context.Context, incident domain.Incident
 			WHEN incidents.confidence IS NULL THEN EXCLUDED.confidence
 			ELSE GREATEST(incidents.confidence, EXCLUDED.confidence)
 		END,
-		observation_quality=EXCLUDED.observation_quality, details=EXCLUDED.details, alert_triggered=EXCLUDED.alert_triggered, updated_at=now()
+		observation_quality=EXCLUDED.observation_quality,
+		details=COALESCE(incidents.details, '{}'::jsonb) || COALESCE(EXCLUDED.details, '{}'::jsonb),
+		alert_triggered=EXCLUDED.alert_triggered, updated_at=now()
 		RETURNING event_id, session_id, type, lifecycle, severity, started_at, ended_at, duration_ms, confidence, observation_quality, detector_version, model_version, threshold_profile_id, details, alert_triggered, created_at, updated_at`,
 		incident.EventID, incident.SessionID, incident.Type, incident.Lifecycle, incident.Severity, incident.StartedAt, incident.EndedAt, incident.DurationMilliseconds, incident.Confidence, incident.ObservationQuality, incident.DetectorVersion, incident.ModelVersion, incident.ThresholdProfileID, incident.Details, incident.AlertTriggered,
 	)
@@ -173,6 +221,12 @@ func (repository *Repository) evidenceForIncidents(ctx context.Context, incident
 }
 
 type rowScanner interface{ Scan(...any) error }
+
+func scanTelemetry(row rowScanner) (domain.DeviceTelemetry, error) {
+	var telemetry domain.DeviceTelemetry
+	err := row.Scan(&telemetry.ID, &telemetry.DeviceID, &telemetry.SessionID, &telemetry.CapturedAt, &telemetry.Latitude, &telemetry.Longitude, &telemetry.AccuracyMeters, &telemetry.SpeedKilometersPerHour, &telemetry.BearingDegrees, &telemetry.Provider, &telemetry.BatteryPercent, &telemetry.Charging, &telemetry.Manufacturer, &telemetry.Model, &telemetry.AndroidVersion, &telemetry.AppVersion, &telemetry.ReceivedAt)
+	return telemetry, err
+}
 
 func scanIncident(row rowScanner) (domain.Incident, error) {
 	incident := domain.Incident{Evidence: make([]domain.Evidence, 0)}

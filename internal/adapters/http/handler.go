@@ -15,11 +15,34 @@ import (
 )
 
 type Handler struct {
-	service *application.IncidentService
+	service           *application.IncidentService
+	telemetryService  *application.TelemetryService
+	enterpriseService *application.EnterpriseService
+	adminBootstrapKey string
 }
 
-func NewHandler(service *application.IncidentService) *Handler {
-	return &Handler{service: service}
+func NewHandler(service *application.IncidentService, telemetryService *application.TelemetryService, enterpriseService *application.EnterpriseService, adminBootstrapKey string) *Handler {
+	return &Handler{service: service, telemetryService: telemetryService, enterpriseService: enterpriseService, adminBootstrapKey: adminBootstrapKey}
+}
+
+func (handler *Handler) CreateTelemetry(c *fiber.Ctx) error {
+	var telemetry domain.DeviceTelemetry
+	if err := c.BodyParser(&telemetry); err != nil {
+		return badRequest(c, "invalid JSON body")
+	}
+	saved, err := handler.telemetryService.Report(context.Background(), telemetry)
+	if err != nil {
+		return badRequest(c, err.Error())
+	}
+	return c.Status(fiber.StatusCreated).JSON(saved)
+}
+
+func (handler *Handler) ListLatestTelemetry(c *fiber.Ctx) error {
+	items, err := handler.telemetryService.Latest(context.Background(), c.QueryInt("limit", 50))
+	if err != nil {
+		return err
+	}
+	return c.JSON(fiber.Map{"items": items})
 }
 
 func (handler *Handler) CreateIncident(c *fiber.Ctx) error {
