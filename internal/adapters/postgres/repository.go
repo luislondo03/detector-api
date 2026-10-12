@@ -41,7 +41,13 @@ func (repository *Repository) Save(ctx context.Context, incident domain.Incident
 	row := repository.pool.QueryRow(ctx, `
 		INSERT INTO incidents (event_id, session_id, type, lifecycle, severity, started_at, ended_at, duration_ms, confidence, observation_quality, detector_version, model_version, threshold_profile_id, details, alert_triggered)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
-		ON CONFLICT (event_id) DO UPDATE SET lifecycle=EXCLUDED.lifecycle, severity=EXCLUDED.severity, ended_at=EXCLUDED.ended_at, duration_ms=EXCLUDED.duration_ms, confidence=EXCLUDED.confidence, observation_quality=EXCLUDED.observation_quality, details=EXCLUDED.details, alert_triggered=EXCLUDED.alert_triggered, updated_at=now()
+		ON CONFLICT (event_id) DO UPDATE SET lifecycle=EXCLUDED.lifecycle, severity=EXCLUDED.severity, ended_at=EXCLUDED.ended_at, duration_ms=EXCLUDED.duration_ms,
+		confidence=CASE
+			WHEN EXCLUDED.confidence IS NULL THEN incidents.confidence
+			WHEN incidents.confidence IS NULL THEN EXCLUDED.confidence
+			ELSE GREATEST(incidents.confidence, EXCLUDED.confidence)
+		END,
+		observation_quality=EXCLUDED.observation_quality, details=EXCLUDED.details, alert_triggered=EXCLUDED.alert_triggered, updated_at=now()
 		RETURNING event_id, session_id, type, lifecycle, severity, started_at, ended_at, duration_ms, confidence, observation_quality, detector_version, model_version, threshold_profile_id, details, alert_triggered, created_at, updated_at`,
 		incident.EventID, incident.SessionID, incident.Type, incident.Lifecycle, incident.Severity, incident.StartedAt, incident.EndedAt, incident.DurationMilliseconds, incident.Confidence, incident.ObservationQuality, incident.DetectorVersion, incident.ModelVersion, incident.ThresholdProfileID, incident.Details, incident.AlertTriggered,
 	)
