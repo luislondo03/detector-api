@@ -228,7 +228,7 @@ func (repository *Repository) RecordHeartbeat(ctx context.Context, principal dom
 }
 
 func (repository *Repository) ListFleet(ctx context.Context) ([]application.FleetVehicle, error) {
-	rows, err := repository.pool.Query(ctx, `SELECT v.id,v.plate,v.internal_code,d.id,d.label,h.occurred_at,h.operation_status,t.latitude,t.longitude,t.captured_at,t.battery_percent FROM vehicles v LEFT JOIN device_vehicle_assignments a ON a.vehicle_id=v.id AND a.ends_at IS NULL LEFT JOIN devices d ON d.id=a.device_id LEFT JOIN LATERAL (SELECT occurred_at,operation_status FROM device_heartbeats WHERE device_id=d.id ORDER BY occurred_at DESC LIMIT 1) h ON TRUE LEFT JOIN LATERAL (SELECT latitude,longitude,captured_at,battery_percent FROM device_telemetry WHERE enterprise_device_id=d.id ORDER BY captured_at DESC LIMIT 1) t ON TRUE ORDER BY v.plate`)
+	rows, err := repository.pool.Query(ctx, fleetListQuery)
 	if err != nil {
 		return nil, err
 	}
@@ -243,6 +243,42 @@ func (repository *Repository) ListFleet(ctx context.Context) ([]application.Flee
 	}
 	return items, rows.Err()
 }
+
+// fleetListQuery retains vehicles that have not been enrolled yet. The textual
+// fields coming from optional joins must never be NULL because the API exposes
+// them as strings; the timestamps and telemetry values intentionally remain
+// nullable to describe an absent last contact/location.
+const fleetListQuery = `
+	SELECT
+		v.id,
+		v.plate,
+		v.internal_code,
+		COALESCE(d.id::text, ''),
+		COALESCE(d.label, ''),
+		h.occurred_at,
+		COALESCE(h.operation_status, ''),
+		t.latitude,
+		t.longitude,
+		t.captured_at,
+		t.battery_percent
+	FROM vehicles v
+	LEFT JOIN device_vehicle_assignments a ON a.vehicle_id = v.id AND a.ends_at IS NULL
+	LEFT JOIN devices d ON d.id = a.device_id
+	LEFT JOIN LATERAL (
+		SELECT occurred_at, operation_status
+		FROM device_heartbeats
+		WHERE device_id = d.id
+		ORDER BY occurred_at DESC
+		LIMIT 1
+	) h ON TRUE
+	LEFT JOIN LATERAL (
+		SELECT latitude, longitude, captured_at, battery_percent
+		FROM device_telemetry
+		WHERE enterprise_device_id = d.id
+		ORDER BY captured_at DESC
+		LIMIT 1
+	) t ON TRUE
+	ORDER BY v.plate`
 
 func (repository *Repository) PurgeTelemetryBefore(ctx context.Context, cutoff time.Time) error {
 	_, err := repository.pool.Exec(ctx, `DELETE FROM device_telemetry WHERE captured_at < $1`, cutoff)
