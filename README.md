@@ -65,7 +65,7 @@ Ejemplo de incidente:
 
 ## Enrolamiento y telemetría de flota
 
-Un operador crea empresa, vehículo, terminal y código de enrolamiento con la cabecera `X-Admin-Bootstrap-Key`. La respuesta devuelve `qrPayload`; conviértelo en un QR sin agregar datos adicionales. El terminal lo escanea y canjea el código una sola vez; la API guarda únicamente hashes del código y de la credencial resultante. La app Android cifra la credencial con Android Keystore.
+Un operador crea empresa, vehículo, terminal y código de enrolamiento con la cabecera `X-Admin-Bootstrap-Key`. La respuesta devuelve `qrPayload`; conviértelo en un QR sin agregar datos adicionales. El terminal lo escanea y canjea el código una sola vez; la API guarda únicamente hashes del código y de la credencial resultante. La app Android cifra la credencial con Android Keystore. Durante el piloto, la pantalla web de aprovisionamiento permite que el operador introduzca esa clave manualmente en memoria para llamar estas rutas; la clave no se distribuye en el bundle ni se persiste. Esta excepción debe eliminarse antes de producción mediante autenticación humana y roles.
 
 El servicio Android de ubicación envía telemetría cada minuto aun cuando la interfaz está minimizada, mediante una notificación persistente. La API elimina telemetría anterior a 90 días al arrancar y cada 24 horas; `TELEMETRY_RETENTION_DAYS=0` deshabilita esa limpieza. No se usan IMEI, número telefónico ni identificadores de hardware.
 
@@ -79,7 +79,7 @@ Para producción define retención/anonimización de telemetría, restringe acce
 | `PORT` | No | Puerto HTTP, `8080` por defecto. |
 | `EVIDENCE_DIRECTORY` | No | Directorio de evidencias, `./storage/evidence` por defecto. |
 | `ALLOWED_ORIGIN` | No | Origen CORS del dashboard; use su URL de Railway en producción. |
-| `ADMIN_BOOTSTRAP_KEY` | Sí para administración | Secreto para crear empresas, vehículos, terminales, QR y revocaciones durante el piloto. Nunca se envía al frontend. |
+| `ADMIN_BOOTSTRAP_KEY` | Sí para administración | Secreto para crear empresas, vehículos, terminales, QR y revocaciones durante el piloto. La pantalla piloto lo recibe solo mediante ingreso manual y nunca lo persiste o distribuye en el bundle. |
 | `TELEMETRY_RETENTION_DAYS` | No | Días de conservación de ubicación; `90` por defecto, `0` deshabilita la limpieza. |
 
 ## Docker y Railway

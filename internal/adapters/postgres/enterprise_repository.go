@@ -70,7 +70,7 @@ func (repository *Repository) RedeemEnrollment(ctx context.Context, codeHash, cr
 	if err = tx.QueryRow(ctx, `SELECT plate FROM vehicles WHERE id=$1 AND company_id=$2`, result.VehicleID, result.CompanyID).Scan(&result.VehiclePlate); err != nil {
 		return domain.EnrollmentResult{}, err
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO audit_logs(id,company_id,device_id,action,resource_type,resource_id) VALUES($1,$2,$3,'DEVICE_ENROLLED','device',$3)`, uuid.NewString(), result.CompanyID, result.DeviceID); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO audit_logs(id,company_id,device_id,action,resource_type,resource_id) VALUES($1,$2,$3,'DEVICE_ENROLLED','device',$4)`, uuid.NewString(), result.CompanyID, result.DeviceID, result.DeviceID); err != nil {
 		return domain.EnrollmentResult{}, err
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -101,7 +101,7 @@ func (repository *Repository) RevokeDevice(ctx context.Context, deviceID string,
 	if err = tx.QueryRow(ctx, `UPDATE devices SET revoked_at=$2,credential_hash=NULL WHERE id=$1 RETURNING company_id`, deviceID, now).Scan(&companyID); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO audit_logs(id,company_id,device_id,action,resource_type,resource_id) VALUES($1,$2,$3,'DEVICE_REVOKED','device',$3)`, uuid.NewString(), companyID, deviceID); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO audit_logs(id,company_id,device_id,action,resource_type,resource_id) VALUES($1,$2,$3,'DEVICE_REVOKED','device',$4)`, uuid.NewString(), companyID, deviceID, deviceID); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
