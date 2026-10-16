@@ -16,9 +16,9 @@ type batchRequest[T any] struct {
 }
 
 func (handler *Handler) RequireAdmin(c *fiber.Ctx) error {
-	if handler.adminBootstrapKey == "" || c.Get("X-Admin-Bootstrap-Key") != handler.adminBootstrapKey {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "admin bootstrap authorization required"})
-	}
+	// Pilot / pruebas: administración abierta sin clave.
+	// Cuando quieras asegurar el entorno, vuelve a exigir ADMIN_BOOTSTRAP_KEY aquí.
+	_ = handler.adminBootstrapKey
 	return c.Next()
 }
 
