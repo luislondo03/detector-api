@@ -3,6 +3,8 @@ package postgres
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/drivervision/api/internal/application"
@@ -242,6 +244,63 @@ func (repository *Repository) ListFleet(ctx context.Context) ([]application.Flee
 		items = append(items, item)
 	}
 	return items, rows.Err()
+}
+
+func (repository *Repository) ListEvents(ctx context.Context, filter application.FleetEventFilter) ([]application.FleetEvent, int, error) {
+	clauses := []string{"TRUE"}
+	args := []any{}
+	if filter.Type != "" {
+		args = append(args, filter.Type)
+		clauses = append(clauses, fmt.Sprintf("e.type=$%d", len(args)))
+	}
+	if filter.Severity != "" {
+		args = append(args, filter.Severity)
+		clauses = append(clauses, fmt.Sprintf("e.severity=$%d", len(args)))
+	}
+	if filter.VehicleID != "" {
+		args = append(args, filter.VehicleID)
+		clauses = append(clauses, fmt.Sprintf("e.vehicle_id=$%d", len(args)))
+	}
+	if filter.From != nil {
+		args = append(args, *filter.From)
+		clauses = append(clauses, fmt.Sprintf("e.started_at >= $%d", len(args)))
+	}
+	if filter.To != nil {
+		args = append(args, *filter.To)
+		clauses = append(clauses, fmt.Sprintf("e.started_at <= $%d", len(args)))
+	}
+	where := strings.Join(clauses, " AND ")
+	var total int
+	if err := repository.pool.QueryRow(ctx, "SELECT count(*) FROM detection_events e WHERE "+where, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	args = append(args, filter.Limit, filter.Offset)
+	query := `SELECT
+		e.event_id, e.session_id, e.type, e.lifecycle, e.severity, e.started_at, e.ended_at, e.duration_ms,
+		e.confidence, e.observation_quality, e.detector_version, e.model_version,
+		e.company_id, e.vehicle_id, v.plate, e.device_id, d.label, e.updated_at
+		FROM detection_events e
+		JOIN vehicles v ON v.id = e.vehicle_id
+		JOIN devices d ON d.id = e.device_id
+		WHERE ` + where + fmt.Sprintf(" ORDER BY e.started_at DESC LIMIT $%d OFFSET $%d", len(args)-1, len(args))
+	rows, err := repository.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	items := make([]application.FleetEvent, 0)
+	for rows.Next() {
+		var item application.FleetEvent
+		if err := rows.Scan(
+			&item.EventID, &item.SessionID, &item.Type, &item.Lifecycle, &item.Severity, &item.StartedAt, &item.EndedAt, &item.DurationMilliseconds,
+			&item.Confidence, &item.ObservationQuality, &item.DetectorVersion, &item.ModelVersion,
+			&item.CompanyID, &item.VehicleID, &item.VehiclePlate, &item.DeviceID, &item.DeviceLabel, &item.UpdatedAt,
+		); err != nil {
+			return nil, 0, err
+		}
+		items = append(items, item)
+	}
+	return items, total, rows.Err()
 }
 
 // fleetListQuery retains vehicles that have not been enrolled yet. The textual

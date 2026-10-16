@@ -26,6 +26,7 @@ La API queda en `http://localhost:8080`; el esquema se crea al arrancar.
 - `POST /api/v1/device-enrollment/redeem`: canjea el código temporal del QR y entrega la credencial del terminal una sola vez.
 - `POST /api/v1/device/{events,sessions,coverage,telemetry}/batch` y `POST /api/v1/device/heartbeat`: ingestión autenticada, idempotente y con ACK por mensaje.
 - `GET /api/v1/fleet/vehicles`: proyección de vehículos con último contacto, estado y ubicación.
+- `GET /api/v1/fleet/events`: eventos de detección de terminales enrolados (tabla `detection_events`); admite `type`, `severity`, `vehicleId`, `from`, `to`, `limit` y `offset`.
 
 Ejemplo de incidente:
 

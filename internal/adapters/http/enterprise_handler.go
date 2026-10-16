@@ -126,6 +126,22 @@ func (handler *Handler) ListFleetVehicles(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"items": items})
 }
 
+func (handler *Handler) ListFleetEvents(c *fiber.Ctx) error {
+	filter := application.FleetEventFilter{Type: c.Query("type"), Severity: c.Query("severity"), VehicleID: c.Query("vehicleId"), Limit: c.QueryInt("limit", 50), Offset: c.QueryInt("offset", 0)}
+	var err error
+	if filter.From, err = parseOptionalTime(c.Query("from")); err != nil {
+		return badRequest(c, "from must be RFC3339")
+	}
+	if filter.To, err = parseOptionalTime(c.Query("to")); err != nil {
+		return badRequest(c, "to must be RFC3339")
+	}
+	items, total, err := handler.enterpriseService.Events(context.Background(), filter)
+	if err != nil {
+		return err
+	}
+	return c.JSON(fiber.Map{"items": items, "total": total, "limit": filter.Limit, "offset": filter.Offset})
+}
+
 func devicePrincipal(c *fiber.Ctx) domain.DevicePrincipal {
 	return c.Locals("devicePrincipal").(domain.DevicePrincipal)
 }

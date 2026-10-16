@@ -26,6 +26,7 @@ type EnterpriseRepository interface {
 	RecordTelemetry(context.Context, domain.DevicePrincipal, domain.TelemetryMessage) (domain.BatchAck, error)
 	RecordHeartbeat(context.Context, domain.DevicePrincipal, domain.DeviceHeartbeat) (domain.BatchAck, error)
 	ListFleet(context.Context) ([]FleetVehicle, error)
+	ListEvents(context.Context, FleetEventFilter) ([]FleetEvent, int, error)
 }
 
 var (
@@ -45,6 +46,40 @@ type FleetVehicle struct {
 	Longitude       *float64   `json:"longitude,omitempty"`
 	LocationAt      *time.Time `json:"locationAt,omitempty"`
 	BatteryPercent  *int       `json:"batteryPercent,omitempty"`
+}
+
+// FleetEventFilter narrows the enterprise detection events exposed to the dashboard.
+type FleetEventFilter struct {
+	Type      string
+	Severity  string
+	VehicleID string
+	From      *time.Time
+	To        *time.Time
+	Limit     int
+	Offset    int
+}
+
+// FleetEvent is a read projection of an enterprise detection event enriched with
+// the vehicle plate and terminal label so the dashboard can render it directly.
+type FleetEvent struct {
+	EventID              string     `json:"eventId"`
+	SessionID            string     `json:"sessionId"`
+	Type                 string     `json:"type"`
+	Lifecycle            string     `json:"lifecycle"`
+	Severity             string     `json:"severity"`
+	StartedAt            time.Time  `json:"startedAt"`
+	EndedAt              *time.Time `json:"endedAt,omitempty"`
+	DurationMilliseconds *int64     `json:"durationMs,omitempty"`
+	Confidence           *float32   `json:"confidence,omitempty"`
+	ObservationQuality   *float32   `json:"observationQuality,omitempty"`
+	DetectorVersion      string     `json:"detectorVersion"`
+	ModelVersion         string     `json:"modelVersion"`
+	CompanyID            string     `json:"companyId"`
+	VehicleID            string     `json:"vehicleId"`
+	VehiclePlate         string     `json:"vehiclePlate"`
+	DeviceID             string     `json:"deviceId"`
+	DeviceLabel          string     `json:"deviceLabel"`
+	UpdatedAt            time.Time  `json:"updatedAt"`
 }
 
 type EnterpriseService struct {
@@ -127,6 +162,15 @@ func (service *EnterpriseService) Revoke(ctx context.Context, deviceID string) e
 }
 func (service *EnterpriseService) Fleet(ctx context.Context) ([]FleetVehicle, error) {
 	return service.repository.ListFleet(ctx)
+}
+func (service *EnterpriseService) Events(ctx context.Context, filter FleetEventFilter) ([]FleetEvent, int, error) {
+	if filter.Limit <= 0 || filter.Limit > 100 {
+		filter.Limit = 50
+	}
+	if filter.Offset < 0 {
+		filter.Offset = 0
+	}
+	return service.repository.ListEvents(ctx, filter)
 }
 func (service *EnterpriseService) Event(ctx context.Context, principal domain.DevicePrincipal, value domain.DeviceEvent) (domain.BatchAck, error) {
 	if err := value.Validate(); err != nil {

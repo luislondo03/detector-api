@@ -36,3 +36,5 @@ ALTER TABLE device_telemetry ADD COLUMN IF NOT EXISTS company_id UUID NULL REFER
 ALTER TABLE device_telemetry ADD COLUMN IF NOT EXISTS vehicle_id UUID NULL REFERENCES vehicles(id);
 ALTER TABLE device_telemetry ADD COLUMN IF NOT EXISTS enterprise_device_id UUID NULL REFERENCES devices(id);
 CREATE INDEX IF NOT EXISTS device_telemetry_enterprise_device_captured_idx ON device_telemetry(enterprise_device_id, captured_at DESC);
+CREATE INDEX IF NOT EXISTS detection_events_started_at_idx ON detection_events(started_at DESC);
+CREATE INDEX IF NOT EXISTS detection_events_vehicle_idx ON detection_events(vehicle_id);
