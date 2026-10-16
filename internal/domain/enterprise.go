@@ -18,7 +18,17 @@ type Vehicle struct {
 	Plate        string    `json:"plate"`
 	InternalCode string    `json:"internalCode"`
 	Status       string    `json:"status"`
+	PairingCode  string    `json:"pairingCode,omitempty"`
+	QRPayload    string    `json:"qrPayload,omitempty"`
 	CreatedAt    time.Time `json:"createdAt"`
+}
+
+// VehicleQRPayload builds the scannable payload Android already understands.
+func VehicleQRPayload(pairingCode string) string {
+	if pairingCode == "" {
+		return ""
+	}
+	return "DRIVER_VISION_ENROLL:" + pairingCode
 }
 
 type Device struct {

@@ -64,6 +64,14 @@ func (handler *Handler) CreateVehicle(c *fiber.Ctx) error {
 	}
 	return c.Status(fiber.StatusCreated).JSON(value)
 }
+
+func (handler *Handler) ListAdminVehicles(c *fiber.Ctx) error {
+	items, err := handler.enterpriseService.ListVehicles(context.Background())
+	if err != nil {
+		return err
+	}
+	return c.JSON(fiber.Map{"items": items})
+}
 func (handler *Handler) CreateDevice(c *fiber.Ctx) error {
 	var request struct {
 		CompanyID string `json:"companyId"`

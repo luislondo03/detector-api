@@ -23,6 +23,9 @@ var telemetrySchema string
 //go:embed migrations/003_enterprise.sql
 var enterpriseSchema string
 
+//go:embed migrations/004_vehicle_pairing.sql
+var vehiclePairingSchema string
+
 type Repository struct{ pool *pgxpool.Pool }
 
 func New(ctx context.Context, databaseURL string) (*Repository, error) {
@@ -43,6 +46,10 @@ func New(ctx context.Context, databaseURL string) (*Repository, error) {
 		return nil, err
 	}
 	if _, err := pool.Exec(ctx, enterpriseSchema); err != nil {
+		pool.Close()
+		return nil, err
+	}
+	if _, err := pool.Exec(ctx, vehiclePairingSchema); err != nil {
 		pool.Close()
 		return nil, err
 	}

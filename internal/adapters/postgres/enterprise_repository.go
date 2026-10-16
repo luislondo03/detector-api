@@ -19,8 +19,95 @@ func (repository *Repository) CreateCompany(ctx context.Context, company domain.
 }
 
 func (repository *Repository) CreateVehicle(ctx context.Context, vehicle domain.Vehicle) (domain.Vehicle, error) {
-	_, err := repository.pool.Exec(ctx, `INSERT INTO vehicles(id,company_id,plate,internal_code,status,created_at) VALUES ($1,$2,$3,$4,$5,$6)`, vehicle.ID, vehicle.CompanyID, vehicle.Plate, vehicle.InternalCode, vehicle.Status, vehicle.CreatedAt)
-	return vehicle, err
+	_, err := repository.pool.Exec(ctx, `INSERT INTO vehicles(id,company_id,plate,internal_code,status,pairing_code,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)`, vehicle.ID, vehicle.CompanyID, vehicle.Plate, vehicle.InternalCode, vehicle.Status, vehicle.PairingCode, vehicle.CreatedAt)
+	if err != nil {
+		return domain.Vehicle{}, err
+	}
+	vehicle.QRPayload = domain.VehicleQRPayload(vehicle.PairingCode)
+	return vehicle, nil
+}
+
+func (repository *Repository) ListAdminVehicles(ctx context.Context) ([]domain.Vehicle, error) {
+	rows, err := repository.pool.Query(ctx, `
+		SELECT id, company_id, plate, COALESCE(internal_code,''), status, COALESCE(pairing_code,''), created_at
+		FROM vehicles
+		ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]domain.Vehicle, 0)
+	for rows.Next() {
+		var vehicle domain.Vehicle
+		if err := rows.Scan(&vehicle.ID, &vehicle.CompanyID, &vehicle.Plate, &vehicle.InternalCode, &vehicle.Status, &vehicle.PairingCode, &vehicle.CreatedAt); err != nil {
+			return nil, err
+		}
+		vehicle.QRPayload = domain.VehicleQRPayload(vehicle.PairingCode)
+		items = append(items, vehicle)
+	}
+	return items, rows.Err()
+}
+
+func (repository *Repository) SetVehiclePairingCode(ctx context.Context, vehicleID, pairingCode string) error {
+	tag, err := repository.pool.Exec(ctx, `
+		UPDATE vehicles SET pairing_code=$2
+		WHERE id=$1 AND (pairing_code IS NULL OR pairing_code='')`, vehicleID, pairingCode)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return errors.New("vehicle not found or already has a pairing code")
+	}
+	return nil
+}
+
+func (repository *Repository) RedeemVehiclePairing(ctx context.Context, pairingCode, credentialHash string, now time.Time) (domain.EnrollmentResult, error) {
+	tx, err := repository.pool.Begin(ctx)
+	if err != nil {
+		return domain.EnrollmentResult{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	var result domain.EnrollmentResult
+	err = tx.QueryRow(ctx, `
+		SELECT id, company_id, plate FROM vehicles
+		WHERE pairing_code=$1 AND status='ACTIVE'`, pairingCode).Scan(&result.VehicleID, &result.CompanyID, &result.VehiclePlate)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.EnrollmentResult{}, application.ErrEnrollmentInvalid
+	}
+	if err != nil {
+		return domain.EnrollmentResult{}, err
+	}
+
+	deviceID := uuid.NewString()
+	label := fmt.Sprintf("Terminal %s", result.VehiclePlate)
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO devices(id,company_id,label,hardware,credential_hash,enrolled_at,revoked_at)
+		VALUES ($1,$2,$3,'Android',$4,$5,NULL)`, deviceID, result.CompanyID, label, credentialHash, now); err != nil {
+		return domain.EnrollmentResult{}, err
+	}
+
+	// One active terminal per vehicle: close previous assignments for this vehicle.
+	if _, err = tx.Exec(ctx, `
+		UPDATE device_vehicle_assignments SET ends_at=$2
+		WHERE vehicle_id=$1 AND ends_at IS NULL`, result.VehicleID, now); err != nil {
+		return domain.EnrollmentResult{}, err
+	}
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO device_vehicle_assignments(id,device_id,vehicle_id,starts_at)
+		VALUES ($1,$2,$3,$4)`, uuid.NewString(), deviceID, result.VehicleID, now); err != nil {
+		return domain.EnrollmentResult{}, err
+	}
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO audit_logs(id,company_id,device_id,action,resource_type,resource_id)
+		VALUES($1,$2,$3,'DEVICE_ENROLLED_VIA_VEHICLE_QR','vehicle',$4)`, uuid.NewString(), result.CompanyID, deviceID, result.VehicleID); err != nil {
+		return domain.EnrollmentResult{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return domain.EnrollmentResult{}, err
+	}
+	result.DeviceID = deviceID
+	return result, nil
 }
 
 func (repository *Repository) CreateDevice(ctx context.Context, device domain.Device) (domain.Device, error) {

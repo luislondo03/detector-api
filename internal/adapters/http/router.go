@@ -35,6 +35,7 @@ func NewApp(handler *Handler, allowedOrigin string, evidenceDirectory string) *f
 	api.Post("/device-enrollment/redeem", handler.RedeemEnrollment)
 	admin := api.Group("/admin", handler.RequireAdmin)
 	admin.Post("/companies", handler.CreateCompany)
+	admin.Get("/vehicles", handler.ListAdminVehicles)
 	admin.Post("/vehicles", handler.CreateVehicle)
 	admin.Post("/devices", handler.CreateDevice)
 	admin.Post("/enrollments", handler.CreateEnrollment)

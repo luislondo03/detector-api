@@ -18,6 +18,9 @@ type EnterpriseRepository interface {
 	CreateDevice(context.Context, domain.Device) (domain.Device, error)
 	CreateEnrollmentCode(context.Context, domain.EnrollmentCode) error
 	RedeemEnrollment(context.Context, string, string, time.Time) (domain.EnrollmentResult, error)
+	RedeemVehiclePairing(context.Context, string, string, time.Time) (domain.EnrollmentResult, error)
+	ListAdminVehicles(context.Context) ([]domain.Vehicle, error)
+	SetVehiclePairingCode(context.Context, string, string) error
 	AuthenticateDevice(context.Context, string) (domain.DevicePrincipal, error)
 	RevokeDevice(context.Context, string, time.Time) error
 	RecordEvent(context.Context, domain.DevicePrincipal, domain.DeviceEvent) (domain.BatchAck, error)
@@ -105,7 +108,54 @@ func (service *EnterpriseService) CreateVehicle(ctx context.Context, companyID, 
 	if companyID == "" || plate == "" {
 		return domain.Vehicle{}, errors.New("companyId and plate are required")
 	}
-	return service.repository.CreateVehicle(ctx, domain.Vehicle{ID: uuid.NewString(), CompanyID: companyID, Plate: plate, InternalCode: internalCode, Status: "ACTIVE", CreatedAt: service.now().UTC()})
+	pairingCode, err := randomSecret()
+	if err != nil {
+		return domain.Vehicle{}, err
+	}
+	vehicle, err := service.repository.CreateVehicle(ctx, domain.Vehicle{
+		ID: uuid.NewString(), CompanyID: companyID, Plate: plate, InternalCode: internalCode,
+		Status: "ACTIVE", PairingCode: pairingCode, CreatedAt: service.now().UTC(),
+	})
+	if err != nil {
+		return domain.Vehicle{}, err
+	}
+	vehicle.QRPayload = domain.VehicleQRPayload(pairingCode)
+	return vehicle, nil
+}
+
+func (service *EnterpriseService) ListVehicles(ctx context.Context) ([]domain.Vehicle, error) {
+	items, err := service.repository.ListAdminVehicles(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for index := range items {
+		if items[index].PairingCode != "" {
+			items[index].QRPayload = domain.VehicleQRPayload(items[index].PairingCode)
+			continue
+		}
+		pairingCode, err := randomSecret()
+		if err != nil {
+			return nil, err
+		}
+		if err := service.repository.SetVehiclePairingCode(ctx, items[index].ID, pairingCode); err != nil {
+			// Another request may have filled it; re-list single vehicle state via full list refresh below.
+			refreshed, listErr := service.repository.ListAdminVehicles(ctx)
+			if listErr != nil {
+				return nil, err
+			}
+			return service.withQRPayloads(refreshed), nil
+		}
+		items[index].PairingCode = pairingCode
+		items[index].QRPayload = domain.VehicleQRPayload(pairingCode)
+	}
+	return items, nil
+}
+
+func (service *EnterpriseService) withQRPayloads(items []domain.Vehicle) []domain.Vehicle {
+	for index := range items {
+		items[index].QRPayload = domain.VehicleQRPayload(items[index].PairingCode)
+	}
+	return items
 }
 
 func (service *EnterpriseService) CreateDevice(ctx context.Context, companyID, label, hardware string) (domain.Device, error) {
@@ -141,7 +191,14 @@ func (service *EnterpriseService) Redeem(ctx context.Context, code string) (doma
 	if err != nil {
 		return domain.EnrollmentResult{}, err
 	}
-	result, err := service.repository.RedeemEnrollment(ctx, hashSecret(code), hashSecret(token), service.now().UTC())
+	now := service.now().UTC()
+	credentialHash := hashSecret(token)
+
+	// Prefer legacy one-time enrollments; fall back to durable vehicle pairing QR.
+	result, err := service.repository.RedeemEnrollment(ctx, hashSecret(code), credentialHash, now)
+	if errors.Is(err, ErrEnrollmentInvalid) {
+		result, err = service.repository.RedeemVehiclePairing(ctx, code, credentialHash, now)
+	}
 	if err != nil {
 		return domain.EnrollmentResult{}, err
 	}
